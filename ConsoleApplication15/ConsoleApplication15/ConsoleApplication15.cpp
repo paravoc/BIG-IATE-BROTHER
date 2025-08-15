@@ -5,6 +5,7 @@
 #include <string>
 #include <iostream>
 #include <algorithm>
+#include"PostgresFaceDB.h"
 
 using namespace cv;
 using namespace cv::dnn;
@@ -88,6 +89,12 @@ double cosineSimilarity(const Mat& a, const Mat& b) {
 }
 
 int main() {
+
+    PostgresFaceDB faceDB("dbname=face_recognition user=postgres password=1234");
+    if (!faceDB.initialize()) {
+        std::cerr << "Failed to initialize database" << std::endl;
+        return -1;
+    }
     // Инициализация моделей
     string arcfacePath = "res/arcface.onnx";
     string facesPath = "faces";
@@ -172,9 +179,11 @@ int main() {
                 }
 
                 // Визуализация результатов
+                auto [name, confidence] = faceDB.identifyFace(embeddings[0]);
                 rectangle(frame, faceLoc, Scalar(0, 255, 0), 2);
                 putText(frame, name, Point(faceLoc.x, faceLoc.y - 10),
                     FONT_HERSHEY_SIMPLEX, 0.8, Scalar(0, 255, 0), 2);
+
                 putText(frame, format("%.2f", bestSimilarity),
                     Point(faceLoc.x, faceLoc.y + faceLoc.height + 20),
                     FONT_HERSHEY_SIMPLEX, 0.6, Scalar(200, 200, 200), 1);
