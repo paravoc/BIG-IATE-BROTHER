@@ -124,7 +124,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Source.cpp" />
+    <ClCompile Include="recognition.cpp" />
     <ClCompile Include="database.cpp" />
   </ItemGroup>
   <ItemGroup>

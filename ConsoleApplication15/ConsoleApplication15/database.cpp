@@ -34,7 +34,7 @@ pair<string, float> check_face_in_db(pqxx::connection& conn, const vector<float>
     float sim1 = result[0]["similarity"].as<float>() * 100.0f;
     string name1 = result[0]["name"].as<string>();
 
-    if (sim1 >= 10.0f) {
+    if (sim1 >= 140.0f) {
         return { name1, sim1 };
     }
 
@@ -42,7 +42,7 @@ pair<string, float> check_face_in_db(pqxx::connection& conn, const vector<float>
     if (result.size() > 1) {
         float sim2 = result[1]["similarity"].as<float>() * 100.0f;
         string name2 = result[1]["name"].as<string>();
-        if (sim2 >= 10.0f) {
+        if (sim2 >= 140.0f) {
             return { name2, sim2 };
         }
     }
