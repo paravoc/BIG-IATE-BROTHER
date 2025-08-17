@@ -56,7 +56,7 @@ vector<float> get_face_embedding(Net& net, Mat face) {
 // ---------------------------
 // Основная функция
 // ---------------------------
-int main() {
+int start_recognition() {
     // Загружаем модели
     Net net = readNetFromONNX("res/arcface.onnx"); // Модель ArcFace для эмбеддингов
     Net faceDetector = readNetFromCaffe("res/deploy.prototxt",
