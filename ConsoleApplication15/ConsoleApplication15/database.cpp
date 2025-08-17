@@ -47,7 +47,7 @@ pair<string, float> check_face_in_db(pqxx::connection& conn, const vector<float>
         return { user_input.empty() ? "Unknown" : user_input, sim1 };
     }
 
-    return sim1 >= 10.0f ? make_pair(name1, sim1) : make_pair("Unknown", sim1);
+    return sim1 >= 140.0f ? make_pair(name1, sim1) : make_pair("Unknown", sim1);
 }
 
 
