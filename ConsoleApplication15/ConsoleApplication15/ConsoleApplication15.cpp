@@ -103,7 +103,7 @@ float cosineSimilarity(const Mat& a, const Mat& b) {
     return static_cast<float>(a.dot(b) / (norm(a) * norm(b)));
 }
 
-int main() {
+int start_recognize() {
     // Инициализация моделей
     string arcfacePath = "res/arcface.onnx";
     string facesPath = "faces";
