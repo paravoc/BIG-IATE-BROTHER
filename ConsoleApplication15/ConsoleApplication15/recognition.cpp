@@ -4,7 +4,13 @@
 #include <vector>
 #include <cmath>
 #include <iostream>
+#include <string>
 #include "database.h"         // Пользовательский хедер для работы с БД
+
+
+ 
+
+
 
 using namespace cv;
 using namespace cv::dnn;
@@ -56,7 +62,7 @@ vector<float> get_face_embedding(Net& net, Mat face) {
 // ---------------------------
 // Основная функция
 // ---------------------------
-int start_recognition() {
+int main() {
     // Загружаем модели
     Net net = readNetFromONNX("res/arcface.onnx"); // Модель ArcFace для эмбеддингов
     Net faceDetector = readNetFromCaffe("res/deploy.prototxt",
@@ -170,7 +176,7 @@ int start_recognition() {
         }
 
         imshow("Face Recognition", frame); // Показываем кадр
-
+        
         // ---------------------------
         // Обработка клавиш
         // ---------------------------

@@ -1,7 +1,7 @@
-﻿  database.cpp
+﻿  recognition.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\ranges(11): warning STL4038: The contents of <ranges> are available only with C++20 or later.
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\span(12): warning STL4038: The contents of <span> are available only with C++20 or later.
-  recognition.cpp
+  database.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\ranges(11): warning STL4038: The contents of <ranges> are available only with C++20 or later.
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\span(12): warning STL4038: The contents of <span> are available only with C++20 or later.
   Создание кода...

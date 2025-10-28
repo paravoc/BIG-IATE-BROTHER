@@ -1,3 +1,8 @@
+#define _SILENCE_ALL_CXX17_DEPRECATION_WARNINGS
+#define _SILENCE_CXX17_OLD_ALLOCATOR_MEMBERS_DEPRECATION_WARNING  
+#define _SILENCE_CXX20_CISO646_REMOVED_WARNING
+#pragma warning(disable:4996)
+
 #include "database.h"
 #include <iostream>
 #include <cmath>
