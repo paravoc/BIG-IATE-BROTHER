@@ -980,14 +980,7 @@ void show_delete_employee_window() {
         putText(delete_gui, status_text, Point(440, y_offset),
             FONT_HERSHEY_SIMPLEX, 0.4, text_color, 1);
 
-        // Delete button
-        Rect delete_btn(500, y_offset - 20, 80, 25);
-        Scalar btn_color = (i == selected_employee_index) ? Scalar(0, 0, 200) : Scalar(0, 0, 150);
-        rectangle(delete_gui, delete_btn, btn_color, -1);
-        rectangle(delete_gui, delete_btn, Scalar(255, 255, 255), 1);
-        putText(delete_gui, "DELETE", Point(510, y_offset - 5),
-            FONT_HERSHEY_SIMPLEX, 0.4, Scalar(255, 255, 255), 1);
-
+        
         y_offset += 40;
         count++;
     }
@@ -1071,7 +1064,7 @@ void handle_delete_employee_keys(int key) {
         }
         break;
 
-    case 84: // Стрелка вниз (Windows)
+    case 9: // Стрелка вниз (Windows)
         selected_employee_index = min((int)filtered_employees.size() - 1, selected_employee_index + 1);
         if (selected_employee_index >= scroll_offset + EMPLOYEES_PER_PAGE) {
             scroll_offset = min((int)filtered_employees.size() - EMPLOYEES_PER_PAGE, scroll_offset + 1);
