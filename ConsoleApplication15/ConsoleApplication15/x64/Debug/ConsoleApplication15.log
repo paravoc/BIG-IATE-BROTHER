@@ -1,10 +1,8 @@
 ﻿  recognition.cpp
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\ranges(11): warning STL4038: The contents of <ranges> are available only with C++20 or later.
 C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\span(12): warning STL4038: The contents of <span> are available only with C++20 or later.
-  database.cpp
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\ranges(11): warning STL4038: The contents of <ranges> are available only with C++20 or later.
-C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.44.35207\include\span(12): warning STL4038: The contents of <span> are available only with C++20 or later.
-  Создание кода...
+C:\Users\paravozik\Desktop\IATELOOK\ConsoleApplication15\ConsoleApplication15\recognition.cpp(233,22): warning C4566: символ, представленный универсальным именем символа "\u2713", невозможно представить в текущей кодовой странице (1251)
+C:\Users\paravozik\Desktop\IATELOOK\ConsoleApplication15\ConsoleApplication15\recognition.cpp(239,22): warning C4566: символ, представленный универсальным именем символа "\u2717", невозможно представить в текущей кодовой странице (1251)
   ConsoleApplication15.vcxproj -> C:\Users\paravozik\Desktop\IATELOOK\ConsoleApplication15\x64\Debug\ConsoleApplication15.exe
   "pwsh.exe" не является внутренней или внешней
   командой, исполняемой программой или пакетным файлом.
