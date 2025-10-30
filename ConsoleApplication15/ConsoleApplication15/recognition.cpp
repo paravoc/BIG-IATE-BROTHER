@@ -10,6 +10,10 @@
 #include <cmath>
 #include <iostream>
 #include <string>
+#include <chrono>
+#include <iomanip>
+#include <sstream>
+#include <algorithm>
 #include "database.h"
 
 using namespace cv;
@@ -29,13 +33,19 @@ const Size GUI_SIZE(800, 600);
 enum AppState {
     MAIN_SCREEN,
     SCANNING,
-    ATTENDANCE_RESULT
+    ATTENDANCE_RESULT,
+    ARRIVAL_STATUS_MESSAGE,
+    DELETE_EMPLOYEE
 };
 
 AppState current_state = MAIN_SCREEN;
 string current_person_name = "";
 string attendance_status = "";
 string next_departure_time = "";
+string check_in_time = "";
+string arrival_status_message = "";
+string scheduled_start_time = "";
+chrono::steady_clock::time_point message_start_time;
 
 // Переменные для добавления сотрудника
 bool adding_new_person = false;
@@ -43,7 +53,38 @@ string new_person_name = "";
 string start_time = "09:00";
 string end_time = "18:00";
 vector<float> new_person_embedding;
-Mat captured_frame; // Кадр, снятый при нажатии 'a'
+Mat captured_frame;
+
+// Переменные для редактирования времени
+enum EditField {
+    NONE,
+    START_TIME,
+    END_TIME
+};
+EditField current_edit_field = NONE;
+string time_edit_buffer = "";
+
+// Переменные для удаления сотрудников
+bool deleting_employee = false;
+vector<string> all_employees;
+string search_query = "";
+int scroll_offset = 0;
+const int EMPLOYEES_PER_PAGE = 8;
+int selected_employee_index = 0; // Индекс выбранного сотрудника
+
+// Глобальные указатели
+pqxx::connection* global_conn = nullptr;
+Net* global_net = nullptr;
+Net* global_faceDetector = nullptr;
+
+// ---------------------------
+// Вспомогательная функция для преобразования в нижний регистр
+// ---------------------------
+string toLower(const string& str) {
+    string result = str;
+    transform(result.begin(), result.end(), result.begin(), ::tolower);
+    return result;
+}
 
 // ---------------------------
 // Функция получения эмбеддинга лица
@@ -70,67 +111,98 @@ vector<float> get_face_embedding(Net& net, Mat face) {
 }
 
 // ---------------------------
-// Функция для отметки посещения
+// Функция для получения текущего времени в формате строки
 // ---------------------------
-void mark_attendance(pqxx::connection& conn, const string& name, const string& check_type) {
+string get_current_time_string() {
+    auto now = chrono::system_clock::now();
+    time_t now_time = chrono::system_clock::to_time_t(now);
+    tm local_tm;
+    localtime_s(&local_tm, &now_time);
+
+    stringstream ss;
+    ss << put_time(&local_tm, "%H:%M:%S");
+    return ss.str();
+}
+
+// ---------------------------
+// Функция для проверки опоздания
+// ---------------------------
+string check_arrival_status(const string& check_time_str, const string& scheduled_time) {
+    try {
+        // Парсим время отметки
+        int check_hour = stoi(check_time_str.substr(0, 2));
+        int check_minute = stoi(check_time_str.substr(3, 2));
+
+        // Парсим время начала работы
+        int scheduled_hour = stoi(scheduled_time.substr(0, 2));
+        int scheduled_minute = stoi(scheduled_time.substr(3, 2));
+
+        // Сравниваем время
+        if (check_hour < scheduled_hour ||
+            (check_hour == scheduled_hour && check_minute <= scheduled_minute)) {
+            return "On Time";
+        }
+        else {
+            return "Late";
+        }
+    }
+    catch (...) {
+        return "Unknown";
+    }
+}
+
+// ---------------------------
+// Функция для отметки посещения с проверкой опоздания
+// ---------------------------
+void mark_attendance_with_schedule(pqxx::connection& conn, const string& name, const string& check_type) {
     pqxx::work txn(conn);
 
     auto result = txn.exec_params("SELECT id FROM face_embeddings WHERE name = $1", name);
     if (!result.empty()) {
         int employee_id = result[0]["id"].as<int>();
 
-        txn.exec_params(
-            "INSERT INTO attendance (employee_id, check_type) VALUES ($1, $2)",
-            employee_id,
-            check_type
-        );
-
-        // Получаем время ухода
+        // Получаем время начала работы сотрудника
         auto schedule_result = txn.exec_params(
-            "SELECT end_time FROM work_schedule WHERE employee_id = $1 AND work_date = CURRENT_DATE",
+            "SELECT start_time, end_time FROM work_schedule WHERE employee_id = $1 AND work_date = CURRENT_DATE",
             employee_id
         );
 
+        scheduled_start_time = "09:00";
         if (!schedule_result.empty()) {
+            scheduled_start_time = schedule_result[0]["start_time"].as<string>();
             next_departure_time = schedule_result[0]["end_time"].as<string>();
         }
         else {
             next_departure_time = "18:00";
         }
 
-        txn.commit();
-    }
-}
+        // Получаем текущее время
+        check_in_time = get_current_time_string();
 
-// ---------------------------
-// Функция добавления сотрудника с графиком
-// ---------------------------
-void add_person_with_schedule(pqxx::connection& conn, const string& name,
-    const vector<float>& embedding,
-    const string& start, const string& end) {
-    pqxx::work txn(conn);
+        // Проверяем опоздание
+        string status = check_arrival_status(check_in_time.substr(0, 5), scheduled_start_time);
 
-    string embedding_str = embedding_to_string(embedding);
-    txn.exec_params(
-        "INSERT INTO face_embeddings (name, embedding) VALUES ($1, $2::vector)",
-        name,
-        embedding_str
-    );
+        // Формируем сообщение о статусе прибытия
+        if (status == "On Time") {
+            arrival_status_message = name + " arrived ON TIME!\\nScheduled: " + scheduled_start_time + "\\nActual: " + check_in_time.substr(0, 5);
+        }
+        else {
+            arrival_status_message = name + " is LATE!\\nScheduled: " + scheduled_start_time + "\\nActual: " + check_in_time.substr(0, 5);
+        }
 
-    auto result = txn.exec_params("SELECT id FROM face_embeddings WHERE name = $1", name);
-    if (!result.empty()) {
-        int employee_id = result[0]["id"].as<int>();
-
+        // Вставляем запись о посещении
         txn.exec_params(
-            "INSERT INTO work_schedule (employee_id, work_date, start_time, end_time) "
-            "VALUES ($1, CURRENT_DATE, $2, $3)",
+            "INSERT INTO attendance (employee_id, check_type) VALUES ($1, $2)",
             employee_id,
-            start,
-            end
+            check_type
         );
-    }
 
-    txn.commit();
+        txn.commit();
+
+        // Запускаем таймер для автоматического закрытия сообщения
+        message_start_time = chrono::steady_clock::now();
+        current_state = ARRIVAL_STATUS_MESSAGE;
+    }
 }
 
 // ---------------------------
@@ -138,7 +210,7 @@ void add_person_with_schedule(pqxx::connection& conn, const string& name,
 // ---------------------------
 Mat create_main_screen(Mat& camera_frame) {
     Mat gui = Mat::zeros(GUI_SIZE, CV_8UC3);
-    gui = Scalar(50, 50, 50); // Темно-серый фон
+    gui = Scalar(50, 50, 50);
 
     // Заголовок
     putText(gui, "ACCESS CONTROL SYSTEM", Point(150, 50),
@@ -172,7 +244,9 @@ Mat create_main_screen(Mat& camera_frame) {
         FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
     putText(gui, "- Press 'a' to add new employee", Point(400, 400),
         FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
-    putText(gui, "- Press 'q' to exit", Point(400, 420),
+    putText(gui, "- Press 'd' to delete employee", Point(400, 420),
+        FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
+    putText(gui, "- Press 'q' to exit", Point(400, 440),
         FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
 
     return gui;
@@ -183,7 +257,7 @@ Mat create_main_screen(Mat& camera_frame) {
 // ---------------------------
 Mat create_scanning_screen(Mat& camera_frame) {
     Mat gui = Mat::zeros(GUI_SIZE, CV_8UC3);
-    gui = Scalar(30, 30, 60); // Синий фон
+    gui = Scalar(30, 30, 60);
 
     putText(gui, "FACE SCANNING", Point(280, 50),
         FONT_HERSHEY_SIMPLEX, 1.2, Scalar(0, 255, 255), 2);
@@ -222,7 +296,7 @@ Mat create_scanning_screen(Mat& camera_frame) {
 // ---------------------------
 Mat create_result_screen() {
     Mat gui = Mat::zeros(GUI_SIZE, CV_8UC3);
-    gui = Scalar(30, 60, 30); // Зеленый фон
+    gui = Scalar(30, 60, 30);
 
     putText(gui, "ATTENDANCE RESULT", Point(250, 80),
         FONT_HERSHEY_SIMPLEX, 1.2, Scalar(255, 255, 255), 2);
@@ -264,14 +338,92 @@ Mat create_result_screen() {
 }
 
 // ---------------------------
+// Функция создания экрана статуса прибытия
+// ---------------------------
+Mat create_arrival_status_screen() {
+    Mat gui = Mat::zeros(GUI_SIZE, CV_8UC3);
+
+    // Выбираем цвет фона в зависимости от статуса
+    if (arrival_status_message.find("ON TIME") != string::npos) {
+        gui = Scalar(30, 60, 30);
+    }
+    else {
+        gui = Scalar(30, 30, 60);
+    }
+
+    putText(gui, "ARRIVAL STATUS", Point(280, 80),
+        FONT_HERSHEY_SIMPLEX, 1.2, Scalar(255, 255, 255), 2);
+
+    // Иконка статуса
+    if (arrival_status_message.find("ON TIME") != string::npos) {
+        circle(gui, Point(400, 200), 60, Scalar(0, 255, 0), -1);
+        putText(gui, "✓", Point(380, 230), FONT_HERSHEY_SIMPLEX, 2.0, Scalar(255, 255, 255), 3);
+        putText(gui, "ON TIME!", Point(330, 300),
+            FONT_HERSHEY_SIMPLEX, 1.5, Scalar(0, 255, 0), 2);
+    }
+    else {
+        circle(gui, Point(400, 200), 60, Scalar(0, 100, 255), -1);
+        putText(gui, "!", Point(390, 230), FONT_HERSHEY_SIMPLEX, 2.0, Scalar(255, 255, 255), 3);
+        putText(gui, "LATE!", Point(350, 300),
+            FONT_HERSHEY_SIMPLEX, 1.5, Scalar(0, 100, 255), 2);
+    }
+
+    // Разбиваем сообщение на строки
+    vector<string> lines;
+    size_t pos = 0;
+    string message = arrival_status_message;
+    while ((pos = message.find("\\n")) != string::npos) {
+        lines.push_back(message.substr(0, pos));
+        message.erase(0, pos + 2);
+    }
+    lines.push_back(message);
+
+    // Отображаем строки сообщения
+    int y_offset = 350;
+    for (const auto& line : lines) {
+        putText(gui, line, Point(150, y_offset),
+            FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255, 255, 255), 1);
+        y_offset += 30;
+    }
+
+    // Таймер обратного отсчета
+    auto current_time = chrono::steady_clock::now();
+    auto elapsed = chrono::duration_cast<chrono::seconds>(current_time - message_start_time);
+    int remaining = 3 - elapsed.count();
+
+    if (remaining > 0) {
+        putText(gui, "Closing in " + to_string(remaining) + " seconds...", Point(300, 450),
+            FONT_HERSHEY_SIMPLEX, 0.6, Scalar(200, 200, 200), 1);
+    }
+
+    return gui;
+}
+
+// ---------------------------
+// Функция для валидации времени
+// ---------------------------
+bool validate_time_format(const string& time_str) {
+    if (time_str.length() != 5) return false;
+    if (time_str[2] != ':') return false;
+
+    try {
+        int hour = stoi(time_str.substr(0, 2));
+        int minute = stoi(time_str.substr(3, 2));
+        return (hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59);
+    }
+    catch (...) {
+        return false;
+    }
+}
+
+// ---------------------------
 // Функция для окна добавления сотрудника
 // ---------------------------
-void show_add_person_window(pqxx::connection& conn, Net& net, Net& faceDetector) {
-    namedWindow("Add Employee", WINDOW_NORMAL);
-    resizeWindow("Add Employee", 600, 400);
+void show_add_person_window() {
+    if (!global_conn || !global_net || !global_faceDetector) return;
 
     Mat add_gui = Mat::zeros(Size(600, 400), CV_8UC3);
-    add_gui = Scalar(60, 30, 60); // Фиолетовый фон
+    add_gui = Scalar(60, 30, 60);
 
     // Используем сохраненный кадр для извлечения эмбеддинга
     if (captured_frame.empty()) {
@@ -286,8 +438,8 @@ void show_add_person_window(pqxx::connection& conn, Net& net, Net& faceDetector)
 
     Mat blob = blobFromImage(resizedFrame, 1.0, Size(300, 300),
         Scalar(104, 177, 123), false, false);
-    faceDetector.setInput(blob);
-    Mat detections = faceDetector.forward();
+    global_faceDetector->setInput(blob);
+    Mat detections = global_faceDetector->forward();
 
     const float* data = detections.ptr<float>();
     const int num_detections = detections.size[2];
@@ -310,7 +462,7 @@ void show_add_person_window(pqxx::connection& conn, Net& net, Net& faceDetector)
                 faceRect.y + faceRect.height <= resizedFrame.rows) {
 
                 Mat face = resizedFrame(faceRect).clone();
-                new_person_embedding = get_face_embedding(net, face);
+                new_person_embedding = get_face_embedding(*global_net, face);
                 face_detected = true;
                 break;
             }
@@ -331,23 +483,33 @@ void show_add_person_window(pqxx::connection& conn, Net& net, Net& faceDetector)
             FONT_HERSHEY_SIMPLEX, 0.7, Scalar(0, 0, 255), 2);
     }
 
-    // Поля ввода
+    // Поле ввода имени
     putText(add_gui, "Full Name:", Point(50, 120),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
     rectangle(add_gui, Rect(200, 100, 300, 30), Scalar(255, 255, 255), 1);
     putText(add_gui, new_person_name, Point(210, 120),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
 
+    // Поле времени начала работы
     putText(add_gui, "Start Time:", Point(50, 160),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
-    rectangle(add_gui, Rect(200, 140, 100, 30), Scalar(255, 255, 255), 1);
-    putText(add_gui, start_time, Point(210, 160),
+    Rect start_time_rect(200, 140, 100, 30);
+    Scalar start_time_color = (current_edit_field == START_TIME) ? Scalar(0, 255, 255) : Scalar(255, 255, 255);
+    rectangle(add_gui, start_time_rect, start_time_color, 2);
+
+    string start_display_text = (current_edit_field == START_TIME && !time_edit_buffer.empty()) ? time_edit_buffer : start_time;
+    putText(add_gui, start_display_text, Point(210, 160),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
 
+    // Поле времени окончания работы
     putText(add_gui, "End Time:", Point(50, 200),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
-    rectangle(add_gui, Rect(200, 180, 100, 30), Scalar(255, 255, 255), 1);
-    putText(add_gui, end_time, Point(210, 200),
+    Rect end_time_rect(200, 180, 100, 30);
+    Scalar end_time_color = (current_edit_field == END_TIME) ? Scalar(0, 255, 255) : Scalar(255, 255, 255);
+    rectangle(add_gui, end_time_rect, end_time_color, 2);
+
+    string end_display_text = (current_edit_field == END_TIME && !time_edit_buffer.empty()) ? time_edit_buffer : end_time;
+    putText(add_gui, end_display_text, Point(210, 200),
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
 
     // Кнопки
@@ -364,35 +526,226 @@ void show_add_person_window(pqxx::connection& conn, Net& net, Net& faceDetector)
         FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
 
     // Инструкция
-    putText(add_gui, "Press ENTER to save, ESC to cancel", Point(150, 350),
+    putText(add_gui, "Use TAB to switch fields, ENTER to save, ESC to cancel", Point(100, 350),
         FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
 
     imshow("Add Employee", add_gui);
 }
 
 // ---------------------------
-// Обработка кликов мыши
+// Функция для окна удаления сотрудников
 // ---------------------------
-void handle_mouse_click(int x, int y) {
-    switch (current_state) {
-    case MAIN_SCREEN:
-        if (x >= 400 && x <= 700 && y >= 150 && y <= 210) {
-            // Кнопка "Check In"
-            current_state = SCANNING;
+void show_delete_employee_window() {
+    if (!global_conn) return;
+
+    Mat delete_gui = Mat::zeros(Size(600, 500), CV_8UC3);
+    delete_gui = Scalar(60, 30, 30);
+
+    // Заголовок
+    putText(delete_gui, "DELETE EMPLOYEE", Point(200, 40),
+        FONT_HERSHEY_SIMPLEX, 1.2, Scalar(255, 100, 100), 2);
+
+    // Поле поиска
+    putText(delete_gui, "Search:", Point(50, 80),
+        FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
+    rectangle(delete_gui, Rect(120, 60, 300, 30), Scalar(255, 255, 255), 1);
+    putText(delete_gui, search_query, Point(130, 80),
+        FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
+
+    // Фильтрация сотрудников по поисковому запросу
+    vector<string> filtered_employees;
+    for (const auto& employee : all_employees) {
+        if (search_query.empty() ||
+            employee.find(search_query) != string::npos ||
+            toLower(employee).find(toLower(search_query)) != string::npos) {
+            filtered_employees.push_back(employee);
+        }
+    }
+
+    // Отображение сотрудников
+    int y_offset = 120;
+    int count = 0;
+
+    for (int i = scroll_offset; i < filtered_employees.size() && count < EMPLOYEES_PER_PAGE; i++) {
+        string employee = filtered_employees[i];
+
+        // Выделение выбранного сотрудника
+        Scalar name_color = (i == selected_employee_index) ? Scalar(0, 255, 255) : Scalar(255, 255, 255);
+        Scalar bg_color = (i == selected_employee_index) ? Scalar(80, 80, 80) : Scalar(60, 30, 30);
+
+        // Фон для выбранного сотрудника
+        if (i == selected_employee_index) {
+            rectangle(delete_gui, Rect(45, y_offset - 25, 510, 35), bg_color, -1);
+        }
+
+        // Имя сотрудника
+        putText(delete_gui, employee, Point(50, y_offset),
+            FONT_HERSHEY_SIMPLEX, 0.6, name_color, 1);
+
+        // Кнопка удаления
+        Rect delete_btn(450, y_offset - 20, 100, 25);
+        Scalar btn_color = (i == selected_employee_index) ? Scalar(0, 0, 200) : Scalar(0, 0, 150);
+        rectangle(delete_gui, delete_btn, btn_color, -1);
+        rectangle(delete_gui, delete_btn, Scalar(255, 255, 255), 1);
+        putText(delete_gui, "DELETE", Point(465, y_offset - 5),
+            FONT_HERSHEY_SIMPLEX, 0.5, Scalar(255, 255, 255), 1);
+
+        y_offset += 40;
+        count++;
+    }
+
+    // Кнопки навигации если много сотрудников
+    if (filtered_employees.size() > EMPLOYEES_PER_PAGE) {
+        // Кнопка "Наверх"
+        if (scroll_offset > 0) {
+            Rect up_btn(250, 450, 100, 30);
+            rectangle(delete_gui, up_btn, Scalar(50, 50, 150), -1);
+            rectangle(delete_gui, up_btn, Scalar(255, 255, 255), 1);
+            putText(delete_gui, "UP", Point(285, 470),
+                FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
+        }
+
+        // Кнопка "Вниз"
+        if (scroll_offset + EMPLOYEES_PER_PAGE < filtered_employees.size()) {
+            Rect down_btn(360, 450, 100, 30);
+            rectangle(delete_gui, down_btn, Scalar(50, 50, 150), -1);
+            rectangle(delete_gui, down_btn, Scalar(255, 255, 255), 1);
+            putText(delete_gui, "DOWN", Point(375, 470),
+                FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
+        }
+    }
+
+    // Кнопка отмены
+    Rect cancel_button(250, 400, 100, 30);
+    rectangle(delete_gui, cancel_button, Scalar(150, 0, 0), -1);
+    rectangle(delete_gui, cancel_button, Scalar(255, 255, 255), 2);
+    putText(delete_gui, "CANCEL", Point(265, 420),
+        FONT_HERSHEY_SIMPLEX, 0.6, Scalar(255, 255, 255), 1);
+
+    // Инструкция
+    putText(delete_gui, "Use ARROWS to navigate, ENTER to delete, ESC to cancel", Point(100, 490),
+        FONT_HERSHEY_SIMPLEX, 0.5, Scalar(200, 200, 200), 1);
+
+    imshow("Delete Employee", delete_gui);
+}
+
+// ---------------------------
+// Обработка клавиш для окна удаления сотрудников
+// ---------------------------
+void handle_delete_employee_keys(int key) {
+    if (!deleting_employee) return;
+
+    // Фильтрация сотрудников по поисковому запросу
+    vector<string> filtered_employees;
+    for (const auto& employee : all_employees) {
+        if (search_query.empty() ||
+            employee.find(search_query) != string::npos ||
+            toLower(employee).find(toLower(search_query)) != string::npos) {
+            filtered_employees.push_back(employee);
+        }
+    }
+
+    if (filtered_employees.empty()) return;
+
+    switch (key) {
+    case 82: // Стрелка вверх
+        selected_employee_index = max(0, selected_employee_index - 1);
+        // Прокрутка вверх если нужно
+        if (selected_employee_index < scroll_offset) {
+            scroll_offset = max(0, scroll_offset - 1);
         }
         break;
 
-    case SCANNING:
-        if (x >= 350 && x <= 450 && y >= 520 && y <= 560) {
-            // Кнопка "Cancel"
-            current_state = MAIN_SCREEN;
+        case 84: // Стрелка вниз
+        selected_employee_index = min((int)filtered_employees.size() - 1, selected_employee_index + 1);
+        // Прокрутка вниз если нужно
+        if (selected_employee_index >= scroll_offset + EMPLOYEES_PER_PAGE) {
+            scroll_offset = min((int)filtered_employees.size() - EMPLOYEES_PER_PAGE, scroll_offset + 1);
         }
         break;
 
-    case ATTENDANCE_RESULT:
-        if (x >= 350 && x <= 450 && y >= 480 && y <= 520) {
-            // Кнопка "OK"
-            current_state = MAIN_SCREEN;
+    case 13: // ENTER - удаление выбранного сотрудника
+        if (selected_employee_index >= 0 && selected_employee_index < filtered_employees.size()) {
+            string employee = filtered_employees[selected_employee_index];
+
+            // Подтверждение удаления
+            cout << "Delete employee: " << employee << "? (y/n): ";
+            string confirmation;
+            getline(cin, confirmation);
+
+            if (confirmation == "y" || confirmation == "Y") {
+                try {
+                    delete_face_from_db(*global_conn, employee);
+                    cout << "Employee " << employee << " deleted successfully!" << endl;
+
+                    // Обновляем список
+                    all_employees = get_all_employees(*global_conn);
+
+                    // Сбрасываем выделение
+                    selected_employee_index = 0;
+                    scroll_offset = 0;
+                }
+                catch (const exception& e) {
+                    cout << "Error deleting employee: " << e.what() << endl;
+                }
+            }
+        }
+        break;
+    }
+}
+
+// ---------------------------
+// Обработка клавиш для окна добавления сотрудника
+// ---------------------------
+void handle_add_person_keys(int key) {
+    if (!adding_new_person) return;
+
+    switch (key) {
+    case 9: // TAB - переключение между полями
+        if (current_edit_field == NONE) {
+            current_edit_field = START_TIME;
+            time_edit_buffer = start_time;
+        }
+        else if (current_edit_field == START_TIME) {
+            current_edit_field = END_TIME;
+            time_edit_buffer = end_time;
+        }
+        else {
+            current_edit_field = NONE;
+            time_edit_buffer = "";
+        }
+        break;
+
+    case 13: // ENTER
+        if (current_edit_field != NONE) {
+            // Завершение редактирования времени
+            if (validate_time_format(time_edit_buffer)) {
+                if (current_edit_field == START_TIME) {
+                    start_time = time_edit_buffer;
+                }
+                else if (current_edit_field == END_TIME) {
+                    end_time = time_edit_buffer;
+                }
+            }
+            current_edit_field = NONE;
+            time_edit_buffer = "";
+        }
+        else {
+            // Сохранение нового сотрудника
+            if (!new_person_name.empty() && !new_person_embedding.empty()) {
+                try {
+                    add_person_with_schedule(*global_conn, new_person_name, new_person_embedding, start_time, end_time);
+                    adding_new_person = false;
+                    new_person_embedding.clear();
+                    captured_frame.release();
+                    current_edit_field = NONE;
+                    destroyWindow("Add Employee");
+                    cout << "Employee " << new_person_name << " added successfully!" << endl;
+                }
+                catch (const exception& e) {
+                    cout << "Error adding employee: " << e.what() << endl;
+                }
+            }
         }
         break;
     }
@@ -409,6 +762,9 @@ int main() {
 
     // Подключаемся к PostgreSQL
     pqxx::connection conn("dbname=face_recognition user=postgres password=1234 host=localhost");
+    global_conn = &conn;
+    global_net = &net;
+    global_faceDetector = &faceDetector;
 
     // Захват видео с камеры
     VideoCapture cap(0);
@@ -427,20 +783,22 @@ int main() {
     namedWindow("Face Recognition System", WINDOW_NORMAL);
     resizeWindow("Face Recognition System", GUI_SIZE.width, GUI_SIZE.height);
 
-    // Обработчик мыши
-    setMouseCallback("Face Recognition System", [](int event, int x, int y, int flags, void* userdata) {
-        if (event == EVENT_LBUTTONDOWN) {
-            handle_mouse_click(x, y);
-        }
-        }, nullptr);
-
     // Главный цикл
     while (true) {
         cap >> frame;
         if (frame.empty()) break;
 
+        // Проверка автоматического закрытия сообщения о статусе прибытия
+        if (current_state == ARRIVAL_STATUS_MESSAGE) {
+            auto current_time = chrono::steady_clock::now();
+            auto elapsed = chrono::duration_cast<chrono::seconds>(current_time - message_start_time);
+            if (elapsed.count() >= 3) {
+                current_state = MAIN_SCREEN;
+            }
+        }
+
         // Отображение основного интерфейса
-        if (!adding_new_person) {
+        if (!adding_new_person && !deleting_employee) {
             Mat gui;
             switch (current_state) {
             case MAIN_SCREEN:
@@ -452,12 +810,25 @@ int main() {
             case ATTENDANCE_RESULT:
                 gui = create_result_screen();
                 break;
+            case ARRIVAL_STATUS_MESSAGE:
+                gui = create_arrival_status_screen();
+                break;
             }
             imshow("Face Recognition System", gui);
         }
 
+        // Отображение окна добавления сотрудника
+        if (adding_new_person) {
+            show_add_person_window();
+        }
+
+        // Отображение окна удаления сотрудников
+        if (deleting_employee) {
+            show_delete_employee_window();
+        }
+
         // Обработка распознавания лиц только в режиме сканирования
-        if (current_state == SCANNING && !adding_new_person) {
+        if (current_state == SCANNING && !adding_new_person && !deleting_employee) {
             Mat resizedFrame;
             resize(frame, resizedFrame, PROCESSING_SIZE);
 
@@ -491,9 +862,8 @@ int main() {
                         auto [name, similarity] = check_face_in_db(conn, current_embedding);
                         if (name != "Unknown" && similarity >= 95.0f) {
                             current_person_name = name;
-                            mark_attendance(conn, name, "in");
+                            mark_attendance_with_schedule(conn, name, "in");
                             attendance_status = "Successfully checked in!";
-                            current_state = ATTENDANCE_RESULT;
                         }
                         else if (name == "Unknown") {
                             current_person_name = "Unknown";
@@ -506,11 +876,6 @@ int main() {
             }
         }
 
-        // Отображение окна добавления сотрудника
-        if (adding_new_person) {
-            show_add_person_window(conn, net, faceDetector);
-        }
-
         // Обработка клавиш
         int key = waitKey(30);
 
@@ -520,13 +885,21 @@ int main() {
                 adding_new_person = false;
                 new_person_embedding.clear();
                 captured_frame.release();
+                current_edit_field = NONE;
                 destroyWindow("Add Employee");
+            }
+            else if (deleting_employee) {
+                deleting_employee = false;
+                search_query = "";
+                scroll_offset = 0;
+                selected_employee_index = 0;
+                destroyWindow("Delete Employee");
             }
             else if (current_state != MAIN_SCREEN) {
                 current_state = MAIN_SCREEN;
             }
         }
-        else if (key == 'a' && !adding_new_person) {
+        else if (key == 'a' && !adding_new_person && !deleting_employee) {
             // Начало добавления нового сотрудника - делаем снимок
             frame.copyTo(captured_frame);
             adding_new_person = true;
@@ -534,28 +907,69 @@ int main() {
             start_time = "09:00";
             end_time = "18:00";
             new_person_embedding.clear();
+            current_edit_field = NONE;
             cout << "Frame captured for new employee!" << endl;
         }
-        else if (key == 13 && adding_new_person) { // ENTER
-            // Сохранение нового сотрудника
-            if (!new_person_name.empty() && !new_person_embedding.empty()) {
-                add_person_with_schedule(conn, new_person_name, new_person_embedding, start_time, end_time);
-                adding_new_person = false;
-                new_person_embedding.clear();
-                captured_frame.release();
-                destroyWindow("Add Employee");
-                cout << "Employee " << new_person_name << " added successfully!" << endl;
-            }
+        else if (key == 'd' && !adding_new_person && !deleting_employee) {
+            // Начало удаления сотрудника
+            deleting_employee = true;
+            all_employees = get_all_employees(conn);
+            search_query = "";
+            scroll_offset = 0;
+            selected_employee_index = 0;
         }
-        // Обработка ввода текста для окна добавления
         else if (adding_new_person) {
-            if (key >= 32 && key <= 126) { // Печатные символы
-                if (new_person_name.length() < 50) {
-                    new_person_name += (char)key;
+            handle_add_person_keys(key);
+
+            // Обработка ввода текста для окна добавления
+            if (current_edit_field != NONE) {
+                // Редактирование времени
+                if (key >= 48 && key <= 57) { // Цифры 0-9
+                    if (time_edit_buffer.length() < 5) {
+                        time_edit_buffer += (char)key;
+                        // Автоматически добавляем двоеточие после 2 цифр
+                        if (time_edit_buffer.length() == 2 && time_edit_buffer.find(':') == string::npos) {
+                            time_edit_buffer += ':';
+                        }
+                    }
+                }
+                else if (key == 8 && !time_edit_buffer.empty()) { // Backspace
+                    time_edit_buffer.pop_back();
+                    // Убираем двоеточие если нужно
+                    if (time_edit_buffer.length() == 2 && time_edit_buffer[1] == ':') {
+                        time_edit_buffer.pop_back();
+                    }
                 }
             }
-            else if (key == 8 && !new_person_name.empty()) { // Backspace
-                new_person_name.pop_back();
+            else {
+                // Ввод имени
+                if (key >= 32 && key <= 126) { // Печатные символы
+                    if (new_person_name.length() < 50) {
+                        new_person_name += (char)key;
+                    }
+                }
+                else if (key == 8 && !new_person_name.empty()) { // Backspace
+                    new_person_name.pop_back();
+                }
+            }
+        }
+        else if (deleting_employee) {
+            handle_delete_employee_keys(key);
+
+            // Ввод поискового запроса
+            if (key >= 32 && key <= 126) { // Печатные символы
+                if (search_query.length() < 30) {
+                    search_query += (char)key;
+                    // Сброс выделения при новом поиске
+                    selected_employee_index = 0;
+                    scroll_offset = 0;
+                }
+            }
+            else if (key == 8 && !search_query.empty()) { // Backspace
+                search_query.pop_back();
+                // Сброс выделения при новом поиске
+                selected_employee_index = 0;
+                scroll_offset = 0;
             }
         }
     }
