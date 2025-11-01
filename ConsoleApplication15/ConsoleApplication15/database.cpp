@@ -52,7 +52,7 @@ pair<string, float> check_face_in_db(pqxx::connection& conn, const vector<float>
     }
 
     // Если разница между первым и вторым меньше 5%, спрашиваем пользователя
-    if (sim1 - sim2 < 5.0f && !name2.empty()) {
+    if (sim1 - sim2 < 25.0f && !name2.empty()) {
         cout << "Multiple similar faces detected: '" << name1 << "' and '" << name2
             << "'. Enter correct name: ";
         string user_input;
@@ -60,7 +60,7 @@ pair<string, float> check_face_in_db(pqxx::connection& conn, const vector<float>
         return { user_input.empty() ? "Unknown" : user_input, sim1 };
     }
 
-    return sim1 >= 95.0f ? make_pair(name1, sim1) : make_pair("Unknown", sim1);
+    return sim1 >= 145.0f ? make_pair(name1, sim1) : make_pair("Unknown", sim1);
 }
 
 // ---------------------------
